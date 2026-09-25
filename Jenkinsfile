@@ -5,17 +5,6 @@ def parse(String text) {
     return text?.trim() ? new JsonSlurperClassic().parseText(text) : null
 }
 
-// ${api:...} / ${rateQuota:...} yer tutucularını oluşan UUID'lerle değiştirir
-def resolve(String text, Map ids) {
-    for (k in ids.keySet()) {
-        text = text.replace('${' + k + '}', ids[k])
-    }
-    if (text.contains('${api:') || text.contains('${rateQuota:')) {
-        error "Çözülemeyen yer tutucu: ${text.take(300)}"
-    }
-    return text
-}
-
 def enc(String s) {
     return URLEncoder.encode(s, 'UTF-8').replace('+', '%20')
 }
@@ -52,14 +41,29 @@ def lookupUuid(String base, String kind, String name, int tries) {
     return null
 }
 
+// Yoksa oluşturur, varsa mevcut UUID'yi döner
+def createNamed(String base, String kind, String path, Map body) {
+    def existing = lookupUuid(base, kind, body.name, 1)
+    if (existing) {
+        echo "Zaten var, atlanıyor: ${body.name} -> ${existing}"
+        return existing
+    }
+    def resp = papi('POST', base + path, JsonOutput.toJson(body))
+    def created = parse(resp.content)
+    def uuid = (created instanceof Map ? created.uuid : null) ?: lookupUuid(base, kind, body.name, 5)
+    if (!uuid) error "UUID bulunamadı: ${body.name}"
+    echo "${body.name} -> ${uuid}"
+    return uuid
+}
+
 pipeline {
     agent any
 
     parameters {
         string(name: 'PAPI_BASE_URL', defaultValue: 'http://10.10.4.11:8080/papi',
                description: 'PAPI adresi')
-        string(name: 'PLAN_FILE', defaultValue: 'l7out/requests-plan-0452.json',
-               description: 'Workspace içindeki requests-plan dosyası')
+        string(name: 'PRODUCT_DIR', defaultValue: 'l7out/helloworld_0452',
+               description: 'product.json, apis/ ve rate-quotas/ içeren klasör')
     }
 
     stages {
@@ -67,59 +71,60 @@ pipeline {
             steps {
                 script {
                     def base = params.PAPI_BASE_URL.replaceAll('/+$', '')
-                    def plan = parse(readFile(params.PLAN_FILE))
-                    def ids = [:]
+                    def dir = params.PRODUCT_DIR.replaceAll('/+$', '')
+                    def mgmt = '/api-management/1.0'
+                    def result = [apis: [:], rateQuotas: [:]]
 
-                    for (r in plan.requests) {
-                        def isProductCreate = r.method == 'POST' && r.path.endsWith('/products')
-                        def kind = r.path.endsWith('/apis') ? 'apis' :
-                                   r.path.endsWith('/rate-quotas') ? 'rate-quotas' : null
-                        def isNamedCreate = r.method == 'POST' && kind
+                    // 1) Product
+                    def product = parse(readFile("${dir}/product.json"))
+                    def chk = papi('GET', "${base}${mgmt}/products/${product.uuid}", null, true)
+                    if (chk.status == 200) {
+                        echo "Product zaten var, atlanıyor: ${product.name}"
+                    } else {
+                        papi('POST', "${base}${mgmt}/products", JsonOutput.toJson(product))
+                    }
+                    result.product = product.uuid
 
-                        // Zaten varsa atla
-                        if (isProductCreate) {
-                            def chk = papi('GET', "${base}/api-management/1.0/products/${r.body.uuid}", null, true)
-                            if (chk.status == 200) {
-                                echo "Product zaten var, atlanıyor: ${r.body.name}"
-                                continue
-                            }
-                        }
-                        if (isNamedCreate) {
-                            def existing = lookupUuid(base, kind, r.body.name, 1)
-                            if (existing) {
-                                ids[(kind == 'apis' ? 'api:' : 'rateQuota:') + r.body.name] = existing
-                                echo "Zaten var, atlanıyor: ${r.body.name} -> ${existing}"
-                                continue
-                            }
-                        }
+                    // 2) API'ler: oluştur -> policy-entities -> publish
+                    def apiUuids = []
+                    def apiFiles = findFiles(glob: "${dir}/apis/*.json")
+                    for (f in apiFiles) {
+                        if (f.name.endsWith('.policy-entities.json')) continue
 
-                        def url = base + resolve(r.path, ids)
-                        if (r.params) {
-                            def q = []
-                            for (k in r.params.keySet()) {
-                                q << enc(k) + '=' + enc(r.params[k].toString())
-                            }
-                            url += '?' + q.join('&')
+                        def api = parse(readFile(f.path))
+                        def uuid = createNamed(base, 'apis', "${mgmt}/apis?addWildcard=false", api)
+
+                        def policyPath = f.path.replaceAll(/\.json$/, '.policy-entities.json')
+                        if (fileExists(policyPath)) {
+                            papi('PUT', "${base}${mgmt}/apis/${uuid}/policy-entities", readFile(policyPath))
+                        } else {
+                            echo "UYARI: policy dosyası yok: ${policyPath}"
                         }
 
-                        def body = r.containsKey('body') ? resolve(JsonOutput.toJson(r.body), ids) : null
-                        def isPatch = r.method == 'PATCH'
-                        def resp = papi(r.method, url, body, isPatch)
-                        if (isPatch && (resp.status < 200 || resp.status > 299)) {
+                        papi('PUT', "${base}${mgmt}/apis/${uuid}/publish", null)
+                        apiUuids << uuid
+                        result.apis[api.name] = uuid
+                    }
+
+                    // 3) API'leri product'a bağla
+                    if (apiUuids) {
+                        def links = []
+                        for (u in apiUuids) links << [apiUuid: u]
+                        def resp = papi('PATCH', "${base}${mgmt}/products/${product.uuid}/apis?action=ADD",
+                                        JsonOutput.toJson(links), true)
+                        if (resp.status < 200 || resp.status > 299) {
                             echo "UYARI: PATCH ${resp.status} döndü (API'ler zaten product'ta olabilir): ${resp.content}"
-                        }
-
-                        if (isNamedCreate) {
-                            def name = r.body.name
-                            def created = parse(resp.content)
-                            def uuid = (created instanceof Map ? created.uuid : null) ?: lookupUuid(base, kind, name, 5)
-                            if (!uuid) error "UUID bulunamadı: ${name}"
-                            ids[(kind == 'apis' ? 'api:' : 'rateQuota:') + name] = uuid
-                            echo "${name} -> ${uuid}"
                         }
                     }
 
-                    writeFile file: 'import-result.json', text: JsonOutput.prettyPrint(JsonOutput.toJson(ids))
+                    // 4) Rate-quota'lar
+                    def rqFiles = findFiles(glob: "${dir}/rate-quotas/*.json")
+                    for (f in rqFiles) {
+                        def rq = parse(readFile(f.path))
+                        result.rateQuotas[rq.name] = createNamed(base, 'rate-quotas', "${mgmt}/rate-quotas", rq)
+                    }
+
+                    writeFile file: 'import-result.json', text: JsonOutput.prettyPrint(JsonOutput.toJson(result))
                 }
             }
         }
