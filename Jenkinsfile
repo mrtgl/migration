@@ -18,25 +18,35 @@ def papi(String method, String url, String body, boolean allowFail = false) {
     }
     def resp = httpRequest(args)
     echo "${method} ${url} -> ${resp.status}"
-    if (!allowFail && (resp.status < 200 || resp.status > 299)) {
+    def failed = resp.status < 200 || resp.status > 299 ||
+                 (resp.content?.trim()?.startsWith('{"error"'))
+    if (!allowFail && failed) {
         error "İstek başarısız (${resp.status}): ${resp.content}"
     }
     return resp
 }
 
-def findInList(def j, String name) {
+// Önce isimle, yoksa ssgUrl ile eşleşen kaydı bulur
+def findInList(def j, String name, String ssgUrl) {
     def list = (j instanceof List) ? j : (j?.results ?: [])
     for (item in list) {
         if (item.name == name) return item.uuid
     }
+    if (ssgUrl) {
+        for (item in list) {
+            if (item.ssgUrl == ssgUrl) {
+                echo "UYARI: '${name}' yerine aynı ssgUrl'li mevcut API kullanılıyor: '${item.name}' (${item.uuid})"
+                return item.uuid
+            }
+        }
+    }
     return null
 }
 
-// Önce isim filtresiyle, bulamazsa tüm listeyi sayfa sayfa gezerek arar
-def lookupUuid(String base, String kind, String name, int tries) {
+def lookupUuid(String base, String kind, String name, String ssgUrl, int tries) {
     for (int i = 0; i < tries; i++) {
         def resp = papi('GET', "${base}/api-management/1.0/${kind}?name=${enc(name)}", null, true)
-        def uuid = findInList(parse(resp.content), name)
+        def uuid = findInList(parse(resp.content), name, null)
         if (uuid) return uuid
 
         int page = 0
@@ -44,7 +54,7 @@ def lookupUuid(String base, String kind, String name, int tries) {
         while (page < totalPages) {
             def all = papi('GET', "${base}/api-management/1.0/${kind}?page=${page}&size=100", null, true)
             def j = parse(all.content)
-            uuid = findInList(j, name)
+            uuid = findInList(j, name, ssgUrl)
             if (uuid) return uuid
             totalPages = (j instanceof Map && j.totalPages != null) ? (j.totalPages as int) : 0
             page++
@@ -57,15 +67,14 @@ def lookupUuid(String base, String kind, String name, int tries) {
 
 // Yoksa oluşturur, varsa mevcut UUID'yi döner
 def createNamed(String base, String kind, String path, Map body) {
-    def existing = lookupUuid(base, kind, body.name, 1)
+    def existing = lookupUuid(base, kind, body.name, body.ssgUrl, 1)
     if (existing) {
         echo "Zaten var, atlanıyor: ${body.name} -> ${existing}"
         return existing
     }
     def resp = papi('POST', base + path, JsonOutput.toJson(body))
-    echo "POST cevabı: ${resp.content?.take(500)}"
     def created = parse(resp.content)
-    def uuid = (created instanceof Map ? created.uuid : null) ?: lookupUuid(base, kind, body.name, 5)
+    def uuid = (created instanceof Map ? created.uuid : null) ?: lookupUuid(base, kind, body.name, body.ssgUrl, 5)
     if (!uuid) error "UUID bulunamadı: ${body.name}"
     echo "${body.name} -> ${uuid}"
     return uuid
