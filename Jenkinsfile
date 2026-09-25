@@ -102,7 +102,9 @@ pipeline {
                     // 1) Product
                     def product = parse(readFile("${dir}/product.json"))
                     def chk = papi('GET', "${base}${mgmt}/products/${product.uuid}", null, true)
-                    if (chk.status == 200) {
+                    def found = parse(chk.content)
+                    echo "Product kontrol cevabı: ${chk.content?.take(300)}"
+                    if (chk.status == 200 && found instanceof Map && found.uuid == product.uuid) {
                         echo "Product zaten var, atlanıyor: ${product.name}"
                     } else {
                         papi('POST', "${base}${mgmt}/products", JsonOutput.toJson(product))
