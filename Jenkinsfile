@@ -16,7 +16,11 @@ def resolve(String text, Map ids) {
     return text
 }
 
-def papi(String method, String url, String body) {
+def enc(String s) {
+    return URLEncoder.encode(s, 'UTF-8').replace('+', '%20')
+}
+
+def papi(String method, String url, String body, boolean allowFail = false) {
     def args = [url: url, httpMode: method, acceptType: 'APPLICATION_JSON',
                 validResponseCodes: '100:599', ignoreSslErrors: true, quiet: true]
     if (body != null) {
@@ -25,20 +29,26 @@ def papi(String method, String url, String body) {
     }
     def resp = httpRequest(args)
     echo "${method} ${url} -> ${resp.status}"
-    if (resp.status < 200 || resp.status > 299) {
+    if (!allowFail && (resp.status < 200 || resp.status > 299)) {
         error "İstek başarısız (${resp.status}): ${resp.content}"
     }
     return resp
 }
 
-// POST cevabında uuid yoksa isimle arayıp bulur
-def lookupUuid(String base, String kind, String name) {
-    def resp = papi('GET', "${base}/api-management/1.0/${kind}?name=${URLEncoder.encode(name, 'UTF-8')}", null)
-    def j = parse(resp.content)
-    def list = (j instanceof List) ? j : (j?.results ?: [])
-    for (item in list) {
-        if (item.name == name) return item.uuid
+// İsimle arar; bulamazsa birkaç kez tekrar dener
+def lookupUuid(String base, String kind, String name, int tries) {
+    def last = ''
+    for (int i = 0; i < tries; i++) {
+        def resp = papi('GET', "${base}/api-management/1.0/${kind}?name=${enc(name)}", null, true)
+        last = resp.content
+        def j = parse(resp.content)
+        def list = (j instanceof List) ? j : (j?.results ?: [])
+        for (item in list) {
+            if (item.name == name) return item.uuid
+        }
+        if (i < tries - 1) sleep 3
     }
+    echo "Bulunamadı (${name}). Son GET cevabı: ${last?.take(1000)}"
     return null
 }
 
@@ -61,24 +71,48 @@ pipeline {
                     def ids = [:]
 
                     for (r in plan.requests) {
+                        def isProductCreate = r.method == 'POST' && r.path.endsWith('/products')
+                        def kind = r.path.endsWith('/apis') ? 'apis' :
+                                   r.path.endsWith('/rate-quotas') ? 'rate-quotas' : null
+                        def isNamedCreate = r.method == 'POST' && kind
+
+                        // Zaten varsa atla
+                        if (isProductCreate) {
+                            def chk = papi('GET', "${base}/api-management/1.0/products/${r.body.uuid}", null, true)
+                            if (chk.status == 200) {
+                                echo "Product zaten var, atlanıyor: ${r.body.name}"
+                                continue
+                            }
+                        }
+                        if (isNamedCreate) {
+                            def existing = lookupUuid(base, kind, r.body.name, 1)
+                            if (existing) {
+                                ids[(kind == 'apis' ? 'api:' : 'rateQuota:') + r.body.name] = existing
+                                echo "Zaten var, atlanıyor: ${r.body.name} -> ${existing}"
+                                continue
+                            }
+                        }
+
                         def url = base + resolve(r.path, ids)
                         if (r.params) {
                             def q = []
                             for (k in r.params.keySet()) {
-                                q << URLEncoder.encode(k, 'UTF-8') + '=' + URLEncoder.encode(r.params[k].toString(), 'UTF-8')
+                                q << enc(k) + '=' + enc(r.params[k].toString())
                             }
                             url += '?' + q.join('&')
                         }
 
                         def body = r.containsKey('body') ? resolve(JsonOutput.toJson(r.body), ids) : null
-                        def resp = papi(r.method, url, body)
+                        def isPatch = r.method == 'PATCH'
+                        def resp = papi(r.method, url, body, isPatch)
+                        if (isPatch && (resp.status < 200 || resp.status > 299)) {
+                            echo "UYARI: PATCH ${resp.status} döndü (API'ler zaten product'ta olabilir): ${resp.content}"
+                        }
 
-                        def kind = r.path.endsWith('/apis') ? 'apis' :
-                                   r.path.endsWith('/rate-quotas') ? 'rate-quotas' : null
-                        if (r.method == 'POST' && kind) {
+                        if (isNamedCreate) {
                             def name = r.body.name
                             def created = parse(resp.content)
-                            def uuid = (created instanceof Map ? created.uuid : null) ?: lookupUuid(base, kind, name)
+                            def uuid = (created instanceof Map ? created.uuid : null) ?: lookupUuid(base, kind, name, 5)
                             if (!uuid) error "UUID bulunamadı: ${name}"
                             ids[(kind == 'apis' ? 'api:' : 'rateQuota:') + name] = uuid
                             echo "${name} -> ${uuid}"
