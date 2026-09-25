@@ -1,0 +1,10 @@
+{
+  "name": "3scale.Test Plan.usersmethod-0452",
+  "description": "For identical behavior to 3scale (shared limit accross different API Paths), assign same limit to each API under the same Application.",
+  "assignmentLevel": "API_PER_APPLICATION",
+  "quota": {},
+  "rateLimit": {
+    "maxRequestsPerSecond": 2000000000
+  },
+  "defaultRateQuota": false
+}

@@ -1,0 +1,14 @@
+{
+  "name": "helloworld /v1/test/users-0452",
+  "portalStatus": "ENABLED",
+  "accessStatus": "PUBLIC",
+  "apiServiceType": "REST",
+  "version": "1.0",
+  "apiEulaUuid": "6a90829e-7a02-11f1-9253-000c29873314",
+  "ssgUrl": "/v1/test/users*",
+  "authenticationType": "APIKEY",
+  "authenticationParameters": "{\"ApiKeyType\":\"header\"}",
+  "locationUrl": "http://helloworld-users-test.apim-btsm-dev.svc.cluster.local:9090/helloworld-users-test",
+  "publishedByPortal": true,
+  "type": "BASIC"
+}

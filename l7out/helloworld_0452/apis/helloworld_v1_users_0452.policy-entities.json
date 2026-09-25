@@ -1,0 +1,63 @@
+[
+  {
+    "policyEntityUuid": "72093738-871a-45bd-b114-ad3a61893ac0",
+    "templateCategoryUuid": "6ab6a340-7a02-11f1-9253-000c29873314",
+    "policyTemplateArguments": []
+  },
+  {
+    "policyEntityUuid": "6be3a697-5a83-4e08-830a-f0e660a5b7d4",
+    "templateCategoryUuid": "dcf9bd23-453b-491d-9210-585871b17345",
+    "policyTemplateArguments": []
+  },
+  {
+    "policyEntityUuid": "22a55297-bcb6-4c97-a66a-c5bbda20e1b1",
+    "templateCategoryUuid": "dcf9bd23-453b-491d-9210-585871b17345",
+    "policyTemplateArguments": [
+      {
+        "name": "metricMethodMapping",
+        "value": "usersmethod"
+      },
+      {
+        "name": "urlPattern",
+        "value": "/v1/users"
+      },
+      {
+        "name": "httpMethod",
+        "value": "GET"
+      }
+    ]
+  },
+  {
+    "policyEntityUuid": "22a55297-bcb6-4c97-a66a-c5bbda20e1b1",
+    "templateCategoryUuid": "dcf9bd23-453b-491d-9210-585871b17345",
+    "policyTemplateArguments": [
+      {
+        "name": "metricMethodMapping",
+        "value": "usersmethod"
+      },
+      {
+        "name": "urlPattern",
+        "value": "/v1/users"
+      },
+      {
+        "name": "httpMethod",
+        "value": "POST"
+      }
+    ]
+  },
+  {
+    "policyEntityUuid": "eb527dd2-1645-4d64-b6a9-7fbbae1f3e29",
+    "templateCategoryUuid": "dcf9bd23-453b-491d-9210-585871b17345",
+    "policyTemplateArguments": []
+  },
+  {
+    "policyEntityUuid": "5cfd04fd-00a0-4493-8e3f-db78caa427ee",
+    "templateCategoryUuid": "dcf9bd23-453b-491d-9210-585871b17345",
+    "policyTemplateArguments": []
+  },
+  {
+    "policyEntityUuid": "dcdbbbdb-24ee-4dea-babc-4c976214d774",
+    "templateCategoryUuid": "dcf9bd23-453b-491d-9210-585871b17345",
+    "policyTemplateArguments": []
+  }
+]
