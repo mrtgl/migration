@@ -24,20 +24,34 @@ def papi(String method, String url, String body, boolean allowFail = false) {
     return resp
 }
 
-// İsimle arar; bulamazsa birkaç kez tekrar dener
+def findInList(def j, String name) {
+    def list = (j instanceof List) ? j : (j?.results ?: [])
+    for (item in list) {
+        if (item.name == name) return item.uuid
+    }
+    return null
+}
+
+// Önce isim filtresiyle, bulamazsa tüm listeyi sayfa sayfa gezerek arar
 def lookupUuid(String base, String kind, String name, int tries) {
-    def last = ''
     for (int i = 0; i < tries; i++) {
         def resp = papi('GET', "${base}/api-management/1.0/${kind}?name=${enc(name)}", null, true)
-        last = resp.content
-        def j = parse(resp.content)
-        def list = (j instanceof List) ? j : (j?.results ?: [])
-        for (item in list) {
-            if (item.name == name) return item.uuid
+        def uuid = findInList(parse(resp.content), name)
+        if (uuid) return uuid
+
+        int page = 0
+        int totalPages = 1
+        while (page < totalPages) {
+            def all = papi('GET', "${base}/api-management/1.0/${kind}?page=${page}&size=100", null, true)
+            def j = parse(all.content)
+            uuid = findInList(j, name)
+            if (uuid) return uuid
+            totalPages = (j instanceof Map && j.totalPages != null) ? (j.totalPages as int) : 0
+            page++
         }
         if (i < tries - 1) sleep 3
     }
-    echo "Bulunamadı (${name}). Son GET cevabı: ${last?.take(1000)}"
+    echo "Bulunamadı: ${name}"
     return null
 }
 
@@ -49,6 +63,7 @@ def createNamed(String base, String kind, String path, Map body) {
         return existing
     }
     def resp = papi('POST', base + path, JsonOutput.toJson(body))
+    echo "POST cevabı: ${resp.content?.take(500)}"
     def created = parse(resp.content)
     def uuid = (created instanceof Map ? created.uuid : null) ?: lookupUuid(base, kind, body.name, 5)
     if (!uuid) error "UUID bulunamadı: ${body.name}"
